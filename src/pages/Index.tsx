@@ -227,6 +227,7 @@ export default function Index() {
               lucro={lucro}
               bonusAtivo={config.bonusAtivo}
               pronto={pronto}
+              faltando={faltando}
               onRegistrar={registrar}
             />
           )}
