@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ClipboardList, FileText, Settings, Plus, Minus, Truck, Check, X, Pencil, Trash2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -28,10 +28,20 @@ const STORAGE = {
   historico: "frota.historico",
   config: "frota.config",
   migCaminhoes: "frota.migracao.caminhoes.v1",
+  syncKey: "frota.sync.key",
+  syncLastPull: "frota.sync.lastPull",
+  syncLastPush: "frota.sync.lastPush",
+  syncLastError: "frota.sync.lastError",
 };
 
 export default function Index() {
   const [aba, setAba] = useState<Tab>("nova");
+
+  // ── Sync ──
+  const [syncKey, setSyncKey] = useLocalStorage<string>(STORAGE.syncKey, "");
+  const [syncLastPull, setSyncLastPull] = useLocalStorage<number>(STORAGE.syncLastPull, 0);
+  const [syncLastPush, setSyncLastPush] = useLocalStorage<number>(STORAGE.syncLastPush, 0);
+  const [syncLastError, setSyncLastError] = useLocalStorage<string>(STORAGE.syncLastError, "");
 
   // ── Caminhões ──
   const [caminhoes, setCaminhoes] = useLocalStorage<Caminhao[]>(STORAGE.caminhoes, []);
@@ -314,6 +324,84 @@ export default function Index() {
     [historicoFiltrado],
   );
 
+  async function syncPull() {
+    const key = (syncKey || "").trim();
+    if (!key) return;
+    try {
+      const res = await fetch(`/api/sync?key=${encodeURIComponent(key)}`, { method: "GET" });
+      const json = await res.json();
+      const snap = json?.snapshot as any;
+      if (!res.ok) throw new Error(json?.error || "Falha ao sincronizar");
+      if (!snap) return;
+
+      const remoteUpdatedAt = Number(snap.updatedAt || 0);
+      if (!remoteUpdatedAt || remoteUpdatedAt <= syncLastPull) return;
+
+      if (snap?.data) {
+        setMotoristas(snap.data.motoristas || []);
+        setCaminhoes(snap.data.caminhoes || []);
+        setHistorico(snap.data.historico || []);
+        setConfig(snap.data.config || config);
+      }
+      setSyncLastPull(remoteUpdatedAt);
+      setSyncLastError("");
+    } catch (e: any) {
+      setSyncLastError(e?.message || "Falha ao sincronizar");
+    }
+  }
+
+  const pushTimer = useRef<number | null>(null);
+  async function syncPush() {
+    const key = (syncKey || "").trim();
+    if (!key) return;
+    const updatedAt = Date.now();
+    try {
+      const res = await fetch(`/api/sync?key=${encodeURIComponent(key)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          v: 1,
+          updatedAt,
+          data: {
+            motoristas,
+            caminhoes,
+            historico,
+            config,
+          },
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json?.error || "Falha ao enviar dados");
+      setSyncLastPush(updatedAt);
+      setSyncLastError("");
+    } catch (e: any) {
+      setSyncLastError(e?.message || "Falha ao enviar dados");
+    }
+  }
+
+  function schedulePush() {
+    if (!(syncKey || "").trim()) return;
+    if (pushTimer.current) window.clearTimeout(pushTimer.current);
+    pushTimer.current = window.setTimeout(() => {
+      syncPush();
+    }, 800);
+  }
+
+  useEffect(() => {
+    // pull ao abrir e a cada 10s
+    if (!(syncKey || "").trim()) return;
+    syncPull();
+    const id = window.setInterval(() => syncPull(), 10_000);
+    return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [syncKey]);
+
+  useEffect(() => {
+    // envia alterações com debounce
+    schedulePush();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [motoristas, caminhoes, historico, config, syncKey]);
+
   return (
     <div className="min-h-screen bg-surface flex justify-center">
       <div className="w-full max-w-[440px] flex flex-col min-h-screen bg-surface">
@@ -395,6 +483,11 @@ export default function Index() {
               config={config}
               setConfig={setConfig}
               pctBonus={pctBonus}
+              syncKey={syncKey}
+              setSyncKey={setSyncKey}
+              syncLastPull={syncLastPull}
+              syncLastPush={syncLastPush}
+              syncLastError={syncLastError}
               caminhoes={caminhoes}
               addCaminhao={addCaminhao}
               updCaminhao={updCaminhao}
@@ -993,6 +1086,11 @@ function ConfigPanel({
   config,
   setConfig,
   pctBonus,
+  syncKey,
+  setSyncKey,
+  syncLastPull,
+  syncLastPush,
+  syncLastError,
   caminhoes,
   addCaminhao,
   updCaminhao,
@@ -1007,6 +1105,45 @@ function ConfigPanel({
 }: any) {
   return (
     <div className="flex flex-col gap-6">
+      <section>
+        <SectionLabel>Sincronização (celular ↔ PC)</SectionLabel>
+        <Card className="p-4 shadow-sm">
+          <p className="text-[13px] text-muted-foreground mb-3 leading-relaxed">
+            Use o mesmo código no celular e no PC para compartilhar as viagens. Requer o projeto publicado na Vercel com KV/Redis configurado.
+          </p>
+          <div className="flex gap-2">
+            <Input
+              value={syncKey || ""}
+              onChange={(e) => setSyncKey(e.target.value.trim())}
+              placeholder="Ex.: frota-123abc"
+              className="h-10 font-bold bg-secondary/60 border-2"
+            />
+            <Button
+              variant="secondary"
+              className="h-10 shrink-0"
+              onClick={() => {
+                const id =
+                  typeof crypto !== "undefined" && "randomUUID" in crypto
+                    ? // @ts-expect-error randomUUID
+                      crypto.randomUUID()
+                    : String(Date.now());
+                setSyncKey(`frota-${String(id).slice(0, 8)}`);
+              }}
+            >
+              Gerar
+            </Button>
+          </div>
+
+          <div className="mt-3 text-[12px] text-muted-foreground">
+            <div>Último pull: {syncLastPull ? new Date(syncLastPull).toLocaleString("pt-BR") : "—"}</div>
+            <div>Último push: {syncLastPush ? new Date(syncLastPush).toLocaleString("pt-BR") : "—"}</div>
+            {syncLastError ? (
+              <div className="mt-2 text-[12px] font-semibold text-destructive">Erro: {syncLastError}</div>
+            ) : null}
+          </div>
+        </Card>
+      </section>
+
       <section>
         <SectionLabel>Consumo de referência (padrão)</SectionLabel>
         <Card className="p-4 shadow-sm">
