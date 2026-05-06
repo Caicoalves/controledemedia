@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ClipboardList, FileText, Settings, Plus, Minus, Truck, Check, X, Pencil, Trash2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,7 @@ import {
   fmtNum,
   toNum,
   type Abast,
+  type Caminhao,
   type Motorista,
   type Registro,
 } from "@/lib/fleet";
@@ -23,6 +24,7 @@ type Tab = "nova" | "historico" | "config";
 
 const STORAGE = {
   motoristas: "frota.motoristas",
+  caminhoes: "frota.caminhoes",
   historico: "frota.historico",
   config: "frota.config",
 };
@@ -30,20 +32,44 @@ const STORAGE = {
 export default function Index() {
   const [aba, setAba] = useState<Tab>("nova");
 
+  // ── Caminhões ──
+  const [caminhoes, setCaminhoes] = useLocalStorage<Caminhao[]>(STORAGE.caminhoes, [
+    { id: 1, placa: "ABC-1234", modelo: "" },
+    { id: 2, placa: "DEF-5678", modelo: "" },
+    { id: 3, placa: "GHI-9012", modelo: "" },
+  ]);
+
   // ── Motoristas ──
   const [motoristas, setMotoristas] = useLocalStorage<Motorista[]>(STORAGE.motoristas, [
-    { id: 1, nome: "Carlos Silva", placa: "ABC-1234" },
-    { id: 2, nome: "José Oliveira", placa: "DEF-5678" },
-    { id: 3, nome: "Marcos Souza", placa: "GHI-9012" },
+    { id: 1, nome: "Carlos Silva", placa: "ABC-1234", caminhaoPadraoId: 1, consumoRefStr: "" },
+    { id: 2, nome: "José Oliveira", placa: "DEF-5678", caminhaoPadraoId: 2, consumoRefStr: "" },
+    { id: 3, nome: "Marcos Souza", placa: "GHI-9012", caminhaoPadraoId: 3, consumoRefStr: "" },
   ]);
   const [editandoMotorista, setEditandoMotorista] = useState<number | null>(null);
 
-  function updMotorista(id: number, campo: "nome" | "placa", val: string) {
-    setMotoristas((p) => p.map((m) => (m.id === id ? { ...m, [campo]: val } : m)));
+  function updMotorista(id: number, patch: Partial<Motorista>) {
+    setMotoristas((p) => p.map((m) => (m.id === id ? { ...m, ...patch } : m)));
+  }
+
+  function updCaminhao(id: number, patch: Partial<Caminhao>) {
+    setCaminhoes((p) => p.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+  }
+
+  function addCaminhao() {
+    const id = Date.now();
+    setCaminhoes((p) => [...p, { id, placa: "", modelo: "" }]);
+  }
+
+  function remCaminhao(id: number) {
+    setCaminhoes((p) => p.filter((c) => c.id !== id));
+    // limpa o vínculo em motoristas
+    setMotoristas((p) =>
+      p.map((m) => (m.caminhaoPadraoId === id ? { ...m, caminhaoPadraoId: null } : m)),
+    );
   }
   function addMotorista() {
     const id = Date.now();
-    setMotoristas((p) => [...p, { id, nome: "", placa: "" }]);
+    setMotoristas((p) => [...p, { id, nome: "", consumoRefStr: "", caminhaoPadraoId: null }]);
     setEditandoMotorista(id);
   }
   function remMotorista(id: number) {
@@ -55,17 +81,86 @@ export default function Index() {
     }
   }
 
+  useEffect(() => {
+    // Migração simples: placas antigas em `motorista.placa` viram caminhões e
+    // o motorista passa a ter `caminhaoPadraoId`.
+    const placasMotoristas = Array.from(
+      new Set(
+        motoristas
+          .map((m) => (m.placa || "").trim().toUpperCase())
+          .filter(Boolean),
+      ),
+    );
+
+    if (placasMotoristas.length === 0) return;
+
+    const mapaPlacaId = new Map<string, number>(
+      caminhoes.map((c) => [c.placa.trim().toUpperCase(), c.id]),
+    );
+
+    let mudouCaminhoes = false;
+    let nextId = Date.now();
+    const novos = [...caminhoes];
+    for (const placa of placasMotoristas) {
+      if (!mapaPlacaId.has(placa)) {
+        const id = nextId++;
+        novos.push({ id, placa, modelo: "" });
+        mapaPlacaId.set(placa, id);
+        mudouCaminhoes = true;
+      }
+    }
+
+    if (mudouCaminhoes) setCaminhoes(novos);
+
+    let mudouMotoristas = false;
+    const motAtual = motoristas.map((m) => {
+      if (m.caminhaoPadraoId != null) return m;
+      const placa = (m.placa || "").trim().toUpperCase();
+      const id = placa ? mapaPlacaId.get(placa) : undefined;
+      if (!id) return m;
+      mudouMotoristas = true;
+      return { ...m, caminhaoPadraoId: id };
+    });
+    if (mudouMotoristas) setMotoristas(motAtual);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ── Config ──
   const [config, setConfig] = useLocalStorage(STORAGE.config, {
     mediaMinStr: "3,6",
     pctBonusStr: "30",
     bonusAtivo: true,
   });
-  const mediaMinima = toNum(config.mediaMinStr);
+  const mediaMinimaPadrao = toNum(config.mediaMinStr);
   const pctBonus = toNum(config.pctBonusStr);
 
   // ── Form ──
   const [motoristaSel, setMotoristaSel] = useState<number>(motoristas[0]?.id ?? 0);
+  const [caminhaoSel, setCaminhaoSel] = useState<number | null>(null);
+
+  const motoristaAtual = useMemo(
+    () => motoristas.find((m) => m.id === motoristaSel),
+    [motoristas, motoristaSel],
+  );
+
+  const caminhaoPadrao = useMemo(() => {
+    const id = motoristaAtual?.caminhaoPadraoId ?? null;
+    if (!id) return null;
+    return caminhoes.find((c) => c.id === id) ?? null;
+  }, [caminhoes, motoristaAtual]);
+
+  const caminhaoAtual = useMemo(() => {
+    if (caminhaoSel != null) return caminhoes.find((c) => c.id === caminhaoSel) ?? null;
+    return caminhaoPadrao;
+  }, [caminhoes, caminhaoPadrao, caminhaoSel]);
+
+  const consumoRefMotorista = toNum(motoristaAtual?.consumoRefStr || "") || mediaMinimaPadrao;
+
+  useEffect(() => {
+    // ao trocar motorista, volta a usar o caminhão padrão automaticamente
+    setCaminhaoSel(null);
+  }, [motoristaSel]);
+
   const [kmSaidaStr, setKmSaidaStr] = useState("");
   const [kmChegadaStr, setKmChegadaStr] = useState("");
   const kmSaida = toNum(kmSaidaStr);
@@ -87,10 +182,10 @@ export default function Index() {
   const custoTotal = abasts.reduce((s, a) => s + a.litros * a.preco, 0);
   const precoMedio = totalLitros > 0 ? custoTotal / totalLitros : 0;
   const mediaReal = totalLitros > 0 && kmRodado > 0 ? kmRodado / totalLitros : 0;
-  const consumoBase = mediaMinima > 0 && kmRodado > 0 ? kmRodado / mediaMinima : 0;
+  const consumoBase = consumoRefMotorista > 0 && kmRodado > 0 ? kmRodado / consumoRefMotorista : 0;
   const economiaL = consumoBase - totalLitros;
   const economiaR = economiaL * precoMedio;
-  const bateuMeta = mediaReal > 0 && mediaReal >= mediaMinima;
+  const bateuMeta = mediaReal > 0 && mediaReal >= consumoRefMotorista;
   const bonus = config.bonusAtivo && bateuMeta ? Math.max(0, economiaR) * (pctBonus / 100) : 0;
   const lucro = economiaR - bonus;
   const pronto = kmSaida > 0 && kmChegada > kmSaida && totalLitros > 0 && custoTotal > 0;
@@ -115,7 +210,7 @@ export default function Index() {
 
   function registrar() {
     if (!pronto) return;
-    const mot = motoristas.find((m) => m.id === motoristaSel);
+    const mot = motoristaAtual;
     const now = new Date();
     const novo: Registro = {
       id: Date.now(),
@@ -123,7 +218,9 @@ export default function Index() {
       mesAno: `${MESES[now.getMonth()]}/${now.getFullYear()}`,
       motoristaId: motoristaSel,
       motoristaNome: mot?.nome || "—",
-      placa: mot?.placa || "—",
+      caminhaoId: caminhaoAtual?.id ?? mot?.caminhaoPadraoId ?? null,
+      placa: caminhaoAtual?.placa || caminhaoPadrao?.placa || mot?.placa || "—",
+      modelo: caminhaoAtual?.modelo || caminhaoPadrao?.modelo || "",
       kmSaida,
       kmChegada,
       kmRodado,
@@ -131,7 +228,7 @@ export default function Index() {
       custoTotal,
       precoMedio,
       mediaReal,
-      mediaMinima,
+      mediaMinima: consumoRefMotorista,
       economiaL,
       economiaR,
       bateuMeta,
@@ -204,8 +301,13 @@ export default function Index() {
           {aba === "nova" && (
             <NovaViagem
               motoristas={motoristas}
+              caminhoes={caminhoes}
               motoristaSel={motoristaSel}
               setMotoristaSel={setMotoristaSel}
+              caminhaoSel={caminhaoSel}
+              setCaminhaoSel={setCaminhaoSel}
+              caminhaoPadrao={caminhaoPadrao}
+              caminhaoAtual={caminhaoAtual}
               kmSaidaStr={kmSaidaStr}
               setKmSaidaStr={setKmSaidaStr}
               kmChegadaStr={kmChegadaStr}
@@ -219,7 +321,7 @@ export default function Index() {
               custoTotal={custoTotal}
               precoMedio={precoMedio}
               mediaReal={mediaReal}
-              mediaMinima={mediaMinima}
+              mediaMinima={consumoRefMotorista}
               economiaL={economiaL}
               economiaR={economiaR}
               bateuMeta={bateuMeta}
@@ -251,6 +353,10 @@ export default function Index() {
               config={config}
               setConfig={setConfig}
               pctBonus={pctBonus}
+              caminhoes={caminhoes}
+              addCaminhao={addCaminhao}
+              updCaminhao={updCaminhao}
+              remCaminhao={remCaminhao}
               motoristas={motoristas}
               historico={historico}
               editandoMotorista={editandoMotorista}
@@ -362,13 +468,22 @@ function StatRow({
 // ─── Nova viagem ──────────────────────────────────────────────────────────
 function NovaViagem(props: any) {
   const {
-    motoristas, motoristaSel, setMotoristaSel,
+    motoristas,
+    caminhoes,
+    motoristaSel,
+    setMotoristaSel,
+    caminhaoSel,
+    setCaminhaoSel,
+    caminhaoPadrao,
+    caminhaoAtual,
     kmSaidaStr, setKmSaidaStr, kmChegadaStr, setKmChegadaStr, kmRodado,
     abasts, addAbast, updAbast, remAbast,
     totalLitros, custoTotal, precoMedio,
     mediaReal, mediaMinima, economiaL, economiaR,
     bateuMeta, bonus, lucro, bonusAtivo, pronto, faltando, onRegistrar,
   } = props;
+
+  const [mostrarTrocaCaminhao, setMostrarTrocaCaminhao] = useState(false);
 
   return (
     <div className="flex flex-col gap-5">
@@ -378,6 +493,9 @@ function NovaViagem(props: any) {
         <div className="flex flex-col gap-2">
           {motoristas.map((m: Motorista) => {
             const selected = motoristaSel === m.id;
+            const c = caminhoes?.find((x: Caminhao) => x.id === (m.caminhaoPadraoId ?? -1));
+            const placa = c?.placa || m.placa || "—";
+            const modelo = c?.modelo || "";
             return (
               <button
                 key={m.id}
@@ -390,14 +508,77 @@ function NovaViagem(props: any) {
                 )}
               >
                 <span className="font-bold text-[15px]">{m.nome || "Sem nome"}</span>
-                <span className={cn("text-xs font-semibold font-mono-num", selected ? "opacity-60" : "text-muted-foreground")}>
-                  {m.placa}
+                <span
+                  className={cn(
+                    "text-xs font-semibold font-mono-num text-right",
+                    selected ? "opacity-60" : "text-muted-foreground",
+                  )}
+                >
+                  {placa}
+                  {modelo ? <span className="block font-sans font-semibold opacity-80">{modelo}</span> : null}
                 </span>
               </button>
             );
           })}
         </div>
       </section>
+
+      {/* Caminhão (discreto) */}
+      {caminhoes?.length > 0 && (
+        <section>
+          <SectionLabel
+            action={
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-xs text-muted-foreground"
+                onClick={() => setMostrarTrocaCaminhao((v) => !v)}
+              >
+                {mostrarTrocaCaminhao ? "Fechar" : "Trocar"}
+              </Button>
+            }
+          >
+            Caminhão
+          </SectionLabel>
+          <Card className="p-4 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-[13px] font-extrabold text-foreground">
+                  {caminhaoAtual?.placa || caminhaoPadrao?.placa || "—"}
+                </div>
+                {!!(caminhaoAtual?.modelo || caminhaoPadrao?.modelo) && (
+                  <div className="text-[12px] text-muted-foreground mt-0.5">
+                    {caminhaoAtual?.modelo || caminhaoPadrao?.modelo}
+                  </div>
+                )}
+                {caminhaoSel != null && (
+                  <div className="text-[11px] text-muted-foreground mt-1">Usando caminhão diferente do padrão</div>
+                )}
+              </div>
+            </div>
+
+            {mostrarTrocaCaminhao && (
+              <div className="mt-3 grid gap-2">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                  Selecionar outro caminhão (opcional)
+                </div>
+                <select
+                  value={caminhaoSel ?? ""}
+                  onChange={(e) => setCaminhaoSel(e.target.value ? Number(e.target.value) : null)}
+                  className="h-10 rounded-2xl bg-secondary/60 border-2 border-border px-3 text-[13px] font-bold text-foreground"
+                >
+                  <option value="">Usar padrão do motorista</option>
+                  {caminhoes.map((c: Caminhao) => (
+                    <option key={c.id} value={c.id}>
+                      {c.placa}{c.modelo ? ` · ${c.modelo}` : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </Card>
+        </section>
+      )}
 
       {/* Hodômetro */}
       <section>
@@ -500,7 +681,7 @@ function NovaViagem(props: any) {
               cor={bateuMeta ? "hsl(var(--success))" : "hsl(var(--destructive))"}
               border
             />
-            <StatRow label="Meta mínima" value={`${fmtNum(mediaMinima)} km/L`} cor="hsl(var(--muted-foreground))" border />
+            <StatRow label="Referência" value={`${fmtNum(mediaMinima)} km/L`} cor="hsl(var(--muted-foreground))" border />
             <StatRow
               label="Economia (litros)"
               value={`${fmtNum(economiaL)} L`}
@@ -656,7 +837,8 @@ function Historico({
                   <div>
                     <div className="font-extrabold text-[14px] text-foreground">{r.motoristaNome}</div>
                     <div className="text-[11px] text-muted-foreground mt-0.5">
-                      {r.placa} · {r.data} · {r.kmSaida.toLocaleString("pt-BR")} → {r.kmChegada.toLocaleString("pt-BR")} km
+                      {r.placa}
+                      {r.modelo ? ` · ${r.modelo}` : ""} · {r.data} · {r.kmSaida.toLocaleString("pt-BR")} → {r.kmChegada.toLocaleString("pt-BR")} km
                     </div>
                   </div>
                   <Badge
@@ -710,6 +892,10 @@ function ConfigPanel({
   config,
   setConfig,
   pctBonus,
+  caminhoes,
+  addCaminhao,
+  updCaminhao,
+  remCaminhao,
   motoristas,
   historico,
   editandoMotorista,
@@ -721,10 +907,10 @@ function ConfigPanel({
   return (
     <div className="flex flex-col gap-6">
       <section>
-        <SectionLabel>Consumo de referência</SectionLabel>
+        <SectionLabel>Consumo de referência (padrão)</SectionLabel>
         <Card className="p-4 shadow-sm">
           <p className="text-[13px] text-muted-foreground mb-3 leading-relaxed">
-            Média mínima esperada. Abaixo disso o motorista não recebe bônus.
+            Usado apenas como padrão. Você pode definir um consumo de referência diferente para cada motorista abaixo.
           </p>
           <NumInput
             large
@@ -781,6 +967,68 @@ function ConfigPanel({
       <section>
         <SectionLabel
           action={
+            <Button size="sm" onClick={addCaminhao} className="h-7 px-3 text-xs">
+              <Plus className="h-3.5 w-3.5 mr-1" /> Novo
+            </Button>
+          }
+        >
+          Caminhões
+        </SectionLabel>
+        <div className="flex flex-col gap-2">
+          {caminhoes.map((c: Caminhao) => {
+            const emMotorista = motoristas.some((m: Motorista) => m.caminhaoPadraoId === c.id);
+            const emViagens = historico.some((r: Registro) => (r.caminhaoId ?? null) === c.id);
+            const podeRemover = !emMotorista && !emViagens;
+            return (
+              <Card key={c.id} className="p-4 shadow-sm">
+                <div className="grid grid-cols-[1fr_1fr_36px] gap-2 items-end">
+                  <div>
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Placa</div>
+                    <Input
+                      value={c.placa}
+                      onChange={(e) => updCaminhao(c.id, { placa: e.target.value.toUpperCase() })}
+                      placeholder="ABC-1234"
+                      className="h-10 font-bold font-mono-num tracking-widest bg-secondary/60 border-2"
+                    />
+                  </div>
+                  <div>
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Modelo</div>
+                    <Input
+                      value={c.modelo}
+                      onChange={(e) => updCaminhao(c.id, { modelo: e.target.value })}
+                      placeholder="Ex.: FH 540, Actros..."
+                      className="h-10 font-bold bg-secondary/60 border-2"
+                    />
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    disabled={!podeRemover}
+                    onClick={() => remCaminhao(c.id)}
+                    className={cn(
+                      "h-10 w-10 shrink-0 rounded-2xl",
+                      podeRemover
+                        ? "border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                        : "opacity-50",
+                    )}
+                    title={
+                      podeRemover
+                        ? "Remover caminhão"
+                        : "Não é possível remover: caminhão em uso (motorista/viagens)"
+                    }
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      </section>
+
+      <section>
+        <SectionLabel
+          action={
             <Button size="sm" onClick={addMotorista} className="h-7 px-3 text-xs">
               <Plus className="h-3.5 w-3.5 mr-1" /> Novo
             </Button>
@@ -800,19 +1048,38 @@ function ConfigPanel({
                       <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Nome</div>
                       <Input
                         value={m.nome}
-                        onChange={(e) => updMotorista(m.id, "nome", e.target.value)}
+                        onChange={(e) => updMotorista(m.id, { nome: e.target.value })}
                         placeholder="Nome do motorista"
                         className="h-10 font-bold bg-secondary/60 border-2"
                       />
                     </div>
                     <div>
-                      <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Placa</div>
-                      <Input
-                        value={m.placa}
-                        onChange={(e) => updMotorista(m.id, "placa", e.target.value.toUpperCase())}
-                        placeholder="ABC-1234"
-                        className="h-10 font-bold font-mono-num tracking-widest bg-secondary/60 border-2"
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">
+                        Consumo de referência (opcional)
+                      </div>
+                      <NumInput
+                        value={m.consumoRefStr || ""}
+                        onChange={(v) => updMotorista(m.id, { consumoRefStr: v })}
+                        suffix="km/L"
+                        placeholder={config.mediaMinStr}
                       />
+                    </div>
+                    <div>
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Caminhão padrão</div>
+                      <select
+                        value={m.caminhaoPadraoId ?? ""}
+                        onChange={(e) =>
+                          updMotorista(m.id, { caminhaoPadraoId: e.target.value ? Number(e.target.value) : null })
+                        }
+                        className="h-10 w-full rounded-2xl bg-secondary/60 border-2 border-border px-3 text-[13px] font-bold text-foreground"
+                      >
+                        <option value="">(Sem caminhão padrão)</option>
+                        {caminhoes.map((c: Caminhao) => (
+                          <option key={c.id} value={c.id}>
+                            {c.placa}{c.modelo ? ` · ${c.modelo}` : ""}
+                          </option>
+                        ))}
+                      </select>
                     </div>
                     <div className="flex gap-2 mt-1">
                       <Button onClick={() => setEditandoMotorista(null)} className="flex-1">
@@ -836,7 +1103,12 @@ function ConfigPanel({
                         {m.nome || <span className="italic text-muted-foreground">Sem nome</span>}
                       </div>
                       <div className="text-xs text-muted-foreground mt-0.5 font-mono-num tracking-wider">
-                        {m.placa || "—"} · {viagens} viagem{viagens !== 1 ? "s" : ""}
+                        {(() => {
+                          const c = caminhoes.find((x: Caminhao) => x.id === (m.caminhaoPadraoId ?? -1));
+                          const placa = c?.placa || m.placa || "—";
+                          const modelo = c?.modelo ? ` · ${c.modelo}` : "";
+                          return `${placa}${modelo} · ${viagens} viagem${viagens !== 1 ? "s" : ""}`;
+                        })()}
                       </div>
                     </div>
                     <Button variant="secondary" size="sm" onClick={() => setEditandoMotorista(m.id)}>

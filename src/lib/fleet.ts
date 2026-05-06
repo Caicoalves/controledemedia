@@ -8,7 +8,22 @@ export const fmtNum = (v: number, d = 2) =>
 
 export const toNum = (s: string) => parseFloat(String(s).replace(",", ".")) || 0;
 
-export type Motorista = { id: number; nome: string; placa: string };
+export type Caminhao = {
+  id: number;
+  placa: string;
+  modelo: string;
+};
+
+export type Motorista = {
+  id: number;
+  nome: string;
+  /** Compat legado: placa era salva direto no motorista */
+  placa?: string;
+  /** Consumo de referência do motorista (km/L) como string pt-BR */
+  consumoRefStr?: string;
+  /** Caminhão padrão do motorista */
+  caminhaoPadraoId?: number | null;
+};
 
 export type Abast = { id: number; litrosStr: string; litros: number; precoStr: string; preco: number };
 
@@ -18,7 +33,9 @@ export type Registro = {
   mesAno: string;
   motoristaId: number;
   motoristaNome: string;
+  caminhaoId?: number | null;
   placa: string;
+  modelo?: string;
   kmSaida: number;
   kmChegada: number;
   kmRodado: number;
