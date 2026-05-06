@@ -1,6 +1,7 @@
 {
   "buildCommand": "npm run build",
   "installCommand": "npm ci",
+  "outputDirectory": "dist",
   "builds": [
     {
       "src": "package.json",
