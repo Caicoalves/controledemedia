@@ -262,6 +262,25 @@ export default function Index() {
           )}
         </main>
 
+        {aba === "nova" && (
+          <div className="sticky bottom-[68px] z-10 px-4 pb-3 pt-2 bg-gradient-to-t from-surface via-surface to-transparent">
+            <Button
+              size="lg"
+              disabled={!pronto}
+              onClick={registrar}
+              className="w-full h-14 text-base font-extrabold rounded-2xl shadow-lg"
+            >
+              {pronto ? (
+                <>
+                  <Check className="h-4 w-4 mr-2" /> Registrar viagem
+                </>
+              ) : (
+                faltando || "Preencha todos os campos"
+              )}
+            </Button>
+          </div>
+        )}
+
         {/* Bottom nav */}
         <nav className="sticky bottom-0 z-10 bg-card/90 backdrop-blur-md border-t border-border flex px-3 pt-2 pb-3">
           <NavBtn icon={<FileText className="h-5 w-5" />} label="Viagem" active={aba === "nova"} onClick={() => setAba("nova")} />
@@ -525,20 +544,8 @@ function NovaViagem(props: any) {
         </section>
       )}
 
-      <Button
-        size="lg"
-        disabled={!pronto}
-        onClick={onRegistrar}
-        className="w-full h-14 text-base font-extrabold rounded-2xl shadow-md"
-      >
-        {pronto ? (
-          <>
-            <Check className="h-4 w-4 mr-2" /> Registrar viagem
-          </>
-        ) : (
-          faltando || "Preencha todos os campos"
-        )}
-      </Button>
+      {/* spacer para o botão fixo */}
+      <div className="h-2" />
     </div>
   );
 }
