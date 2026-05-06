@@ -27,17 +27,14 @@ const STORAGE = {
   caminhoes: "frota.caminhoes",
   historico: "frota.historico",
   config: "frota.config",
+  migCaminhoes: "frota.migracao.caminhoes.v1",
 };
 
 export default function Index() {
   const [aba, setAba] = useState<Tab>("nova");
 
   // ── Caminhões ──
-  const [caminhoes, setCaminhoes] = useLocalStorage<Caminhao[]>(STORAGE.caminhoes, [
-    { id: 1, placa: "ABC-1234", modelo: "" },
-    { id: 2, placa: "DEF-5678", modelo: "" },
-    { id: 3, placa: "GHI-9012", modelo: "" },
-  ]);
+  const [caminhoes, setCaminhoes] = useLocalStorage<Caminhao[]>(STORAGE.caminhoes, []);
 
   // ── Motoristas ──
   const [motoristas, setMotoristas] = useLocalStorage<Motorista[]>(STORAGE.motoristas, [
@@ -82,6 +79,10 @@ export default function Index() {
   }
 
   useEffect(() => {
+    // Se já migramos uma vez, não recria caminhões deletados pelo usuário.
+    const jaMigrou = window?.localStorage?.getItem(STORAGE.migCaminhoes) === "1";
+    if (jaMigrou) return;
+
     // Migração simples: placas antigas em `motorista.placa` viram caminhões e
     // o motorista passa a ter `caminhaoPadraoId`.
     const placasMotoristas = Array.from(
@@ -92,7 +93,15 @@ export default function Index() {
       ),
     );
 
-    if (placasMotoristas.length === 0) return;
+    // Só migra se ainda não existem caminhões cadastrados.
+    if (caminhoes.length > 0) {
+      window?.localStorage?.setItem(STORAGE.migCaminhoes, "1");
+      return;
+    }
+    if (placasMotoristas.length === 0) {
+      window?.localStorage?.setItem(STORAGE.migCaminhoes, "1");
+      return;
+    }
 
     const mapaPlacaId = new Map<string, number>(
       caminhoes.map((c) => [c.placa.trim().toUpperCase(), c.id]),
@@ -122,6 +131,9 @@ export default function Index() {
       return { ...m, caminhaoPadraoId: id };
     });
     if (mudouMotoristas) setMotoristas(motAtual);
+    // Após migrar, marca como concluído e remove a dependência do campo legado `placa`.
+    window?.localStorage?.setItem(STORAGE.migCaminhoes, "1");
+    setMotoristas((p) => p.map((m) => ({ ...m, placa: undefined })));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -207,6 +219,8 @@ export default function Index() {
   const [historico, setHistorico] = useLocalStorage<Registro[]>(STORAGE.historico, []);
   const [filtroMotorista, setFiltroMotorista] = useState<number | "todos">("todos");
   const [mesSelecionado, setMesSelecionado] = useState<string>("todos");
+  const [filtroCaminhao, setFiltroCaminhao] = useState<number | "todos">("todos");
+  const [filtroMeta, setFiltroMeta] = useState<"todos" | "atingida" | "abaixo">("todos");
 
   function registrar() {
     if (!pronto) return;
@@ -253,9 +267,18 @@ export default function Index() {
       historico.filter((r) => {
         const passaMot = filtroMotorista === "todos" || r.motoristaId === filtroMotorista;
         const passaMes = mesSelecionado === "todos" || r.mesAno === mesSelecionado;
-        return passaMot && passaMes;
+        const caminhaoId = (r.caminhaoId ?? null) as number | null;
+        const passaCam =
+          filtroCaminhao === "todos" ? true : caminhaoId != null && caminhaoId === filtroCaminhao;
+        const passaMeta =
+          filtroMeta === "todos"
+            ? true
+            : filtroMeta === "atingida"
+              ? r.bateuMeta
+              : !r.bateuMeta;
+        return passaMot && passaMes && passaCam && passaMeta;
       }),
-    [historico, filtroMotorista, mesSelecionado],
+    [historico, filtroMotorista, mesSelecionado, filtroCaminhao, filtroMeta],
   );
 
   const historicoAgrupado = useMemo(() => {
@@ -267,13 +290,27 @@ export default function Index() {
   }, [historicoFiltrado]);
 
   const totalFiltrado = useMemo(
-    () => ({
-      viagens: historicoFiltrado.length,
-      km: historicoFiltrado.reduce((s, r) => s + r.kmRodado, 0),
-      economia: historicoFiltrado.reduce((s, r) => s + r.economiaR, 0),
-      bonus: historicoFiltrado.reduce((s, r) => s + r.bonus, 0),
-      lucro: historicoFiltrado.reduce((s, r) => s + r.lucro, 0),
-    }),
+    () => {
+      const km = historicoFiltrado.reduce((s, r) => s + r.kmRodado, 0);
+      const litros = historicoFiltrado.reduce((s, r) => s + r.totalLitros, 0);
+      const litrosRef = historicoFiltrado.reduce((s, r) => {
+        const ref = r.mediaMinima || 0;
+        return ref > 0 ? s + r.kmRodado / ref : s;
+      }, 0);
+      const mediaGeral = litros > 0 ? km / litros : 0;
+      const refGeral = litrosRef > 0 ? km / litrosRef : 0;
+
+      return {
+        viagens: historicoFiltrado.length,
+        km,
+        litros,
+        mediaGeral,
+        refGeral,
+        economia: historicoFiltrado.reduce((s, r) => s + r.economiaR, 0),
+        bonus: historicoFiltrado.reduce((s, r) => s + r.bonus, 0),
+        lucro: historicoFiltrado.reduce((s, r) => s + r.lucro, 0),
+      };
+    },
     [historicoFiltrado],
   );
 
@@ -338,10 +375,15 @@ export default function Index() {
             <Historico
               historico={historico}
               motoristas={motoristas}
+              caminhoes={caminhoes}
               filtroMotorista={filtroMotorista}
               setFiltroMotorista={setFiltroMotorista}
               mesSelecionado={mesSelecionado}
               setMesSelecionado={setMesSelecionado}
+              filtroCaminhao={filtroCaminhao}
+              setFiltroCaminhao={setFiltroCaminhao}
+              filtroMeta={filtroMeta}
+              setFiltroMeta={setFiltroMeta}
               mesesDisponiveis={mesesDisponiveis}
               agrupado={historicoAgrupado}
               total={totalFiltrado}
@@ -735,10 +777,15 @@ function NovaViagem(props: any) {
 function Historico({
   historico,
   motoristas,
+  caminhoes,
   filtroMotorista,
   setFiltroMotorista,
   mesSelecionado,
   setMesSelecionado,
+  filtroCaminhao,
+  setFiltroCaminhao,
+  filtroMeta,
+  setFiltroMeta,
   mesesDisponiveis,
   agrupado,
   total,
@@ -774,6 +821,58 @@ function Historico({
         })}
       </div>
 
+      {/* Filtros extras */}
+      <Card className="p-3 shadow-sm">
+        <div className="grid grid-cols-2 gap-2 items-end">
+          <div>
+            <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">
+              Caminhão
+            </div>
+            <select
+              value={filtroCaminhao}
+              onChange={(e) => setFiltroCaminhao(e.target.value === "todos" ? "todos" : Number(e.target.value))}
+              className="h-10 w-full rounded-2xl bg-secondary/60 border-2 border-border px-3 text-[13px] font-bold text-foreground"
+            >
+              <option value="todos">Todos</option>
+              {(caminhoes || []).map((c: Caminhao) => (
+                <option key={c.id} value={c.id}>
+                  {c.placa}{c.modelo ? ` · ${c.modelo}` : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">
+              Meta
+            </div>
+            <div className="flex gap-1.5">
+              {[
+                { id: "todos" as const, label: "Todas" },
+                { id: "atingida" as const, label: "Atingida" },
+                { id: "abaixo" as const, label: "Abaixo" },
+              ].map((o) => {
+                const sel = filtroMeta === o.id;
+                return (
+                  <button
+                    key={o.id}
+                    onClick={() => setFiltroMeta(o.id)}
+                    className={cn(
+                      "flex-1 px-2.5 py-2 rounded-2xl text-[11px] font-extrabold border-2 transition-colors",
+                      sel
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-border bg-card text-muted-foreground hover:bg-accent",
+                    )}
+                  >
+                    {o.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </Card>
+
       {/* Filtro mês */}
       {mesesDisponiveis.length > 1 && (
         <div className="flex gap-1.5 overflow-x-auto pb-1 -mx-1 px-1 scrollbar-none">
@@ -807,6 +906,8 @@ function Historico({
           {[
             { l: "Viagens", v: String(total.viagens) },
             { l: "Km total", v: `${total.km.toLocaleString("pt-BR")} km` },
+            { l: "Média geral", v: `${fmtNum(total.mediaGeral)} km/L` },
+            { l: "Ref. média", v: `${fmtNum(total.refGeral)} km/L` },
             { l: "Economia", v: fmtBRL(total.economia), cor: "hsl(var(--success))" },
             { l: "Lucro", v: fmtBRL(total.lucro), cor: "hsl(var(--success))" },
           ].map(({ l, v, cor }) => (
