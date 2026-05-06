@@ -94,6 +94,19 @@ export default function Index() {
   const bonus = config.bonusAtivo && bateuMeta ? Math.max(0, economiaR) * (pctBonus / 100) : 0;
   const lucro = economiaR - bonus;
   const pronto = kmSaida > 0 && kmChegada > kmSaida && totalLitros > 0 && custoTotal > 0;
+  const faltando = !motoristaSel
+    ? "Selecione o motorista"
+    : kmSaida <= 0
+      ? "Informe o KM de saída"
+      : kmChegada <= 0
+        ? "Informe o KM de chegada"
+        : kmChegada <= kmSaida
+          ? "KM de chegada deve ser maior que a saída"
+          : totalLitros <= 0
+            ? "Informe os litros abastecidos"
+            : custoTotal <= 0
+              ? "Informe o preço por litro"
+              : "";
 
   // ── Histórico ──
   const [historico, setHistorico] = useLocalStorage<Registro[]>(STORAGE.historico, []);
@@ -214,6 +227,7 @@ export default function Index() {
               lucro={lucro}
               bonusAtivo={config.bonusAtivo}
               pronto={pronto}
+              faltando={faltando}
               onRegistrar={registrar}
             />
           )}
@@ -334,7 +348,7 @@ function NovaViagem(props: any) {
     abasts, addAbast, updAbast, remAbast,
     totalLitros, custoTotal, precoMedio,
     mediaReal, mediaMinima, economiaL, economiaR,
-    bateuMeta, bonus, lucro, bonusAtivo, pronto, onRegistrar,
+    bateuMeta, bonus, lucro, bonusAtivo, pronto, faltando, onRegistrar,
   } = props;
 
   return (
@@ -522,7 +536,7 @@ function NovaViagem(props: any) {
             <Check className="h-4 w-4 mr-2" /> Registrar viagem
           </>
         ) : (
-          "Preencha todos os campos"
+          faltando || "Preencha todos os campos"
         )}
       </Button>
     </div>
