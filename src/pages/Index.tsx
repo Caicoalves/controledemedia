@@ -348,7 +348,7 @@ function NovaViagem(props: any) {
     abasts, addAbast, updAbast, remAbast,
     totalLitros, custoTotal, precoMedio,
     mediaReal, mediaMinima, economiaL, economiaR,
-    bateuMeta, bonus, lucro, bonusAtivo, pronto, onRegistrar,
+    bateuMeta, bonus, lucro, bonusAtivo, pronto, faltando, onRegistrar,
   } = props;
 
   return (
