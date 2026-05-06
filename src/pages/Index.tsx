@@ -536,7 +536,7 @@ function NovaViagem(props: any) {
             <Check className="h-4 w-4 mr-2" /> Registrar viagem
           </>
         ) : (
-          "Preencha todos os campos"
+          faltando || "Preencha todos os campos"
         )}
       </Button>
     </div>
