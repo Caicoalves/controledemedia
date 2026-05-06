@@ -525,20 +525,8 @@ function NovaViagem(props: any) {
         </section>
       )}
 
-      <Button
-        size="lg"
-        disabled={!pronto}
-        onClick={onRegistrar}
-        className="w-full h-14 text-base font-extrabold rounded-2xl shadow-md"
-      >
-        {pronto ? (
-          <>
-            <Check className="h-4 w-4 mr-2" /> Registrar viagem
-          </>
-        ) : (
-          faltando || "Preencha todos os campos"
-        )}
-      </Button>
+      {/* spacer para o botão fixo */}
+      <div className="h-2" />
     </div>
   );
 }
